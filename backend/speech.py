@@ -8,7 +8,8 @@ from backend.engine import Event
 
 async def speak_windows(text, rate, volume):
     process = await asyncio.create_subprocess_exec(
-        "powershell.exe", "-NoProfile", "-NonInteractive", "-File", "scripts/speak.ps1",
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", "scripts/speak.ps1",
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )

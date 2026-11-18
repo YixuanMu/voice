@@ -20,7 +20,7 @@ def session(ts):
 
 
 def limit(q):
-    if q.suspended:
+    if q.suspended or not q.limits_known:
         return ""
     if q.upper and q.price >= q.upper - 0.001:
         return "up"
@@ -73,7 +73,10 @@ class MarketEngine:
         self.stocks = {}
         self.transitions = deque()
         self.totals = Counter()
+        self.opened_stocks = set()
+        self.resealed_stocks = set()
         self.trend = deque(maxlen=120)
+        self.sector_leaders = {}
         self.clock = None
         self.segment = None
         self.reset_pending = True
@@ -99,17 +102,19 @@ class MarketEngine:
         if day_changed:
             self.stocks.clear()
             self.totals.clear()
+            self.opened_stocks.clear()
+            self.resealed_stocks.clear()
             self.trend.clear()
         reset = (self.reset_pending or segment != self.segment or self.clock is None
                  or ts - self.clock > cfg["gap_seconds"])
         if reset:
             self.transitions.clear()
+            self.sector_leaders.clear()
             for state in self.stocks.values():
                 state.history.clear()
         self.clock, self.segment, self.reset_pending = ts, segment, False
         events, volume, moves = [], [], {}
-        recent_up = set()
-        for q in rows:
+        for q in sorted(rows, key=lambda quote: quote.ts):
             if session(q.ts) != segment or ts - q.ts > cfg["late_seconds"]:
                 continue
             state = self.stocks.get(q.code)
@@ -124,18 +129,21 @@ class MarketEngine:
                               and q.ts - state.quote.ts <= cfg["gap_seconds"]
                               and q.amount >= state.quote.amount)
                 if continuous:
-                    if previous != current:
+                    boost = 40 if q.code in cfg["watchlist"] else 0
+                    if state.quote.limits_known and q.limits_known and previous != current:
                         if previous == "up":
                             self.totals["opened"] += 1
-                            events.append(Event(ts, "open", q.code, f"{q.name}涨停开板", 65))
+                            self.opened_stocks.add(q.code)
+                            events.append(Event(ts, "open", q.code, f"{q.name}涨停开板", 65 + boost))
                         if current:
                             first = current not in state.touched
                             self.transitions.append((ts, current, first, q.code))
                             if current == "up":
-                                recent_up.add(q.code)
                                 if not first:
                                     self.totals["resealed"] += 1
-                                    events.append(Event(ts, "reseal", q.code, f"{q.name}重新封住涨停", 75))
+                                    self.resealed_stocks.add(q.code)
+                                    events.append(Event(ts, "reseal", q.code,
+                                                        f"{q.name}重新封住涨停", 75 + boost))
                     self.detect_stock(q, state, events, volume, moves)
                 else:
                     state.history.clear()
@@ -155,6 +163,7 @@ class MarketEngine:
             q = state.quote
             if ts - q.ts <= cfg["late_seconds"]:
                 counts["covered"] += 1
+                counts["limit_covered"] += q.limits_known or q.suspended
                 if q.suspended:
                     counts["suspended"] += 1
                     continue
@@ -162,6 +171,7 @@ class MarketEngine:
                 counts["rising"] += q.price > q.previous_close
                 counts["falling"] += q.price < q.previous_close
         coverage = min(1.0, counts["covered"] / max(1, batch.expected))
+        limit_coverage = min(1.0, counts["limit_covered"] / max(1, batch.expected))
         windows = {}
         for minutes in (1, 3, 5, 10):
             transitions = [(side, first, code) for stamp, side, first, code in self.transitions
@@ -175,17 +185,21 @@ class MarketEngine:
             }
         five = windows[5]
         threshold = cfg["market_limit_alert"]
-        if coverage >= cfg["coverage"] and any(side["new"] >= threshold for side in five.values()):
+        if limit_coverage >= cfg["coverage"] and any(side["new"] >= threshold for side in five.values()):
             events.append(Event(ts, "market", "limits", f"最近五分钟，全市场新增"
                                 f"{five['up']['new']}只涨停股票，新增{five['down']['new']}只跌停股票", 90))
 
+        recent_up = {code for stamp, side, _, code in self.transitions
+                     if side == "up" and stamp > ts - 180}
         sector_rows = self.detect_sectors(batch.sectors, moves, recent_up, ts, events)
         self.trend.append({"ts": ts, "up": counts["rising"], "down": counts["falling"]})
         snapshot = {"ts": ts, "up": counts["up"], "down": counts["down"],
                     "rising": counts["rising"], "falling": counts["falling"],
                     "covered": counts["covered"], "expected": batch.expected, "coverage": coverage,
-                    "reliable": coverage >= cfg["coverage"], "suspended": counts["suspended"],
+                    "limit_coverage": limit_coverage,
+                    "reliable": limit_coverage >= cfg["coverage"], "suspended": counts["suspended"],
                     "opened": self.totals["opened"], "resealed": self.totals["resealed"],
+                    "opened_stocks": len(self.opened_stocks), "resealed_stocks": len(self.resealed_stocks),
                     "windows": windows, "trend": list(self.trend), "sectors": sector_rows[:15],
                     "volume": sorted(volume, key=lambda row: -row["ratio"])[:15]}
         return snapshot, sorted(events, key=lambda event: (-event.priority, event.key))
@@ -217,11 +231,11 @@ class MarketEngine:
                 priority = 55 if spike and rising else 35
                 priority += 40 if q.code in cfg["watchlist"] else 0
                 events.append(Event(q.ts, "stock", q.code,
-                                    f"{q.name}{minutes}分钟" + "，".join(details), priority))
+                                    f"{q.name}，{minutes}分钟" + "，".join(details), priority))
 
     def detect_sectors(self, sectors, moves, recent_up, ts, events):
         cfg = self.settings
-        rows, candidates = [], []
+        rows, candidates, next_leaders = [], [], {}
         for name, codes in sectors.items():
             covered = codes & moves.keys()
             entered = len(codes & recent_up)
@@ -233,17 +247,29 @@ class MarketEngine:
             pct = mean(changes.values())
             gaining = {code for code, change in changes.items() if change >= cfg["sector_stock_pct"]}
             falling = {code for code, change in changes.items() if change <= -cfg["sector_stock_pct"]}
+            prior_leader, since, previous_gainers = self.sector_leaders.get(name, ("", 0, set()))
+            leader = prior_leader if prior_leader in gaining else ""
+            followers = gaining - previous_gainers - {leader}
+            follows = (bool(leader) and 0 < ts - since <= 180
+                       and len(followers) >= cfg["sector_members"] - 1 and bool(followers))
+            if gaining:
+                selected = leader or min(gaining, key=lambda code: (-changes[code], code))
+                next_leaders[name] = (selected, since if leader else ts, gaining)
             expected = sum(moves[code][2] for code in covered)
             amount = sum(moves[code][1] for code in covered if moves[code][2] > 0)
             ratio = amount / expected if expected else 0
             row = {"name": name, "pct": round(pct, 2), "fast": len(gaining), "falling": len(falling),
                    "limits": entered, "ratio": round(ratio, 2), "covered": len(covered)}
+            if follows:
+                row["leader"] = self.stocks[leader].quote.name
+                row["followers"] = len(followers)
             rows.append(row)
             if (abs(pct) >= cfg["sector_pct"] or max(len(gaining), len(falling)) >= cfg["sector_members"]
-                    or entered >= cfg["sector_limits"] or ratio >= cfg["sector_amount"]):
+                    or entered >= cfg["sector_limits"] or ratio >= cfg["sector_amount"] or follows):
                 active = gaining | falling | (codes & recent_up)
                 score = abs(pct) + len(active) + ratio
                 candidates.append((score, name, active or covered, row))
+        self.sector_leaders = next_leaders
         accepted = []
         for _, name, active, row in sorted(candidates, key=lambda item: (-item[0], item[1])):
             if any(len(active & other) / min(len(active), len(other)) >= cfg["sector_overlap"]
@@ -254,9 +280,11 @@ class MarketEngine:
             details = (f"过去三分钟平均{direction}百分之{abs(row['pct']):.2f}，"
                        f"{row['fast']}只快速上涨，{row['falling']}只快速下跌")
             if row["limits"]:
-                details += f"，本批次{row['limits']}只触及涨停"
+                details += f"，过去三分钟{row['limits']}只触及涨停"
             if row["ratio"]:
                 details += f"，成交额达到基线的{row['ratio']:.1f}倍"
+            if "leader" in row:
+                details += f"，{row['leader']}率先拉升后，另有{row['followers']}只成分股达到拉升阈值"
             events.append(Event(ts, "sector", name, f"注意，{name}板块异动，{details}", 80))
         return sorted(rows, key=lambda row: (-abs(row["pct"]), row["name"]))
 

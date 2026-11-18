@@ -3,7 +3,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from backend.engine import MarketEngine
+from backend.engine import MarketEngine, Stock
 from backend.providers import Batch, MockDataProvider
 
 
@@ -41,6 +41,27 @@ class EngineTests(unittest.TestCase):
         afternoon, events = self.tick(12600, 11)
         self.assertEqual((1, []), (afternoon["up"], events))
         self.assertEqual(0, afternoon["windows"][5]["up"]["entries"])
+
+    def test_partial_coverage_suppresses_market_summary(self):
+        self.engine.settings["market_limit_alert"] = 1
+        self.tick(0, 10)
+        q = replace(self.first, ts=self.first.ts + 10, price=11)
+        snapshot, events = self.engine.ingest(Batch([q], 2, {}))
+        self.assertFalse(snapshot["reliable"])
+        self.assertEqual(1, snapshot["windows"][5]["up"]["new"])
+        self.assertFalse(any(event.kind == "market" for event in events))
+
+    def test_overlapping_sectors_and_temporal_followers(self):
+        sectors = {"行业": {"A", "B", "C"}, "概念": {"A", "B", "C"}}
+        self.engine.settings["sector_coverage"] = 1.0
+        first = {code: (change, 1, 1) for code, change in [("A", 2), ("B", 0), ("C", 0)]}
+        self.engine.stocks["A"] = Stock(self.first)
+        self.engine.detect_sectors(sectors, first, set(), 100, [])
+        second = {code: (3, 1, 1) for code in first}
+        events = []
+        rows = self.engine.detect_sectors(sectors, second, set(), 110, events)
+        self.assertEqual(1, len(events))
+        self.assertTrue(all(row["followers"] == 2 for row in rows))
 
     def test_full_universe_detects_volume_and_sector(self):
         kinds = set()

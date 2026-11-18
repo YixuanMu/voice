@@ -18,6 +18,7 @@ class Quote:
     upper: float | None = None
     lower: float | None = None
     suspended: bool = False
+    limits_known: bool = True
 
 
 @dataclass(slots=True)
@@ -34,8 +35,9 @@ class MockDataProvider:
         self.count = count
         self.interval = interval
 
-    def frames(self):
-        start = datetime(2026, 1, 5, 9, 30, tzinfo=CHINA).timestamp()
+    def frames(self, day_offset=0):
+        start = (datetime(2026, 1, 5, 9, 30, tzinfo=CHINA)
+                 + timedelta(days=day_offset)).timestamp()
         codes = [f"MOCK{i:05}" for i in range(self.count)]
         sectors = {"模拟·商业航天": set(codes[:30]),
                    "模拟·机器人": set(codes[30:60]),
@@ -63,9 +65,12 @@ class MockDataProvider:
             yield Batch(quotes, self.count, sectors)
 
     async def batches(self):
-        for frame in self.frames():
-            yield frame
-            await asyncio.sleep(self.interval)
+        day_offset = 0
+        while True:
+            for frame in self.frames(day_offset):
+                yield frame
+                await asyncio.sleep(self.interval)
+            day_offset += 3 if day_offset % 7 == 4 else 1
 
 
 class ReplayDataProvider:
