@@ -52,13 +52,15 @@ async def main():
         loop = asyncio.get_running_loop()
         arrived = asyncio.Event()
         samples = list(stocks)[:1]
+
         def receive(data):
             try:
                 response = json.loads(data)
             except (ValueError, TypeError):
                 return
-                if isinstance(response, dict) and response.get("ResultSets") and not response.get("ErrorId"):
+            if isinstance(response, dict) and response.get("ResultSets") and not response.get("ErrorId"):
                 loop.call_soon_threadsafe(arrived.set)
+
         provider.sdk.subscribe(stock_list=samples, callback=receive)
         try:
             await asyncio.wait_for(arrived.wait(), timeout=30)
