@@ -34,6 +34,8 @@ const labels: Record<string, string> = {
   min_amount: '异动最低区间成交额（元）', baseline_windows: '历史基线窗口数', sector_pct: '板块涨跌阈值（%）',
   sector_stock_pct: '板块个股涨跌阈值（%）', sector_members: '板块同向异动股数', sector_limits: '板块新增涨停股数',
   sector_amount: '板块放量倍数', sector_coverage: '板块最低覆盖率', sector_overlap: '板块去重重合率',
+  sector_flow_wan: '板块主力净流入／流出阈值（万元）',
+  sector_accumulation_wan: '板块增仓信号阈值（万元）',
   market_limit_alert: '五分钟首次触板播报阈值', cooldown: '事件冷却（秒）', merge_seconds: '播报合并（秒）',
   rate: '语速（−10 至 10）', volume: '音量（0 至 100）', paused: '暂停播报', watchlist: '自选股代码（逗号分隔）',
 }

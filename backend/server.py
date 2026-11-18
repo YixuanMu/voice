@@ -147,7 +147,7 @@ class Monitor:
         fresh = []
         for event in events:
             key = event.kind, event.key
-            repeating = event.kind in {"stock", "market", "sector"}
+            repeating = event.kind in {"stock", "rapid_rise", "market", "sector"}
             if key in active:
                 continue
             if repeating:

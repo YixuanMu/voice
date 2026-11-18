@@ -19,11 +19,12 @@ class FakeSDK:
         return ["600000.SH", "TEST.HK"]
 
     def get_more_info_batch(self, stock_list, field_list, return_df):
-        return {"600000.SH": {"HqDate": "20260918", "ZTPrice": "9.97", "DTPrice": "8.15"}}
+        return {"600000.SH": {"HqDate": "20260918", "ZTPrice": "9.97", "DTPrice": "8.15",
+                              "ZAFPre5": "0", "ZAFPre10": "2.30", "Zjl_HB": "-1130.75"}}
 
     def get_market_snapshot_batch(self, stock_list, field_list, return_df):
         return {"600000.SH": {"Now": "9.07", "LastClose": "9.06", "Amount": "46996.94",
-                              "RefreshTime": "095025"},
+                              "RefreshTime": "095025", "ZAFPre3": "-1.25"},
                 "000001.SZ": {"Now": "15.01"}}
 
 
@@ -42,6 +43,8 @@ class TdxTests(unittest.TestCase):
         self.assertEqual(9.97, quote.upper)
         self.assertEqual(8.15, quote.lower)
         self.assertAlmostEqual(469969400, quote.amount)
+        self.assertEqual((-1.25, 0, 2.30, -1130.75),
+                         (quote.pct_3d, quote.pct_5d, quote.pct_10d, quote.main_flow_wan))
         self.assertEqual(datetime(2026, 9, 18, 9, 50, 25, tzinfo=CHINA).timestamp(), quote.ts)
 
     def test_stale_calendar_date_and_no_price_limits(self):

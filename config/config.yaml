@@ -17,10 +17,12 @@
   "sector_amount": 1.8,
   "sector_coverage": 0.7,
   "sector_overlap": 0.5,
+  "sector_flow_wan": 5000,
+  "sector_accumulation_wan": 2000,
   "market_limit_alert": 3,
   "cooldown": 35,
   "merge_seconds": 1.1,
-  "rate": 0,
+  "rate": 1,
   "volume": 85,
   "paused": false,
   "watchlist": []

@@ -9,16 +9,21 @@ from pathlib import Path
 from backend.engine import session
 from backend.providers import CHINA, Batch, Quote
 
-SNAPSHOT_FIELDS = ["Now", "LastClose", "RefreshTime", "Amount"]
-META_FIELDS = ["HqDate", "ZTPrice", "DTPrice", "StopJYDate_Recent"]
+SNAPSHOT_FIELDS = ["Now", "LastClose", "RefreshTime", "Amount", "ZAFPre3"]
+META_FIELDS = ["HqDate", "ZTPrice", "DTPrice", "StopJYDate_Recent", "ZAFPre5", "ZAFPre10", "Zjl_HB"]
+
+
+def optional_number(value):
+    try:
+        number = float(value)
+        return number if isfinite(number) else None
+    except (ValueError, TypeError):
+        return None
 
 
 def positive_number(value):
-    try:
-        number = float(value)
-        return number if isfinite(number) and number > 0 else None
-    except (ValueError, TypeError):
-        return None
+    number = optional_number(value)
+    return number if number is not None and number > 0 else None
 
 
 def parse_snapshot(code, name, row, meta, day):
@@ -44,7 +49,9 @@ def parse_snapshot(code, name, row, meta, day):
         for key in ("ZTPrice", "DTPrice"))
     suspended = str(meta.get("StopJYDate_Recent")) == day_key and amount == 0
     return Quote(code, name, stamp.timestamp(), price, close, amount, upper, lower,
-                 suspended, has_limits)
+                 suspended, has_limits, optional_number(row.get("ZAFPre3")),
+                 optional_number(meta.get("ZAFPre5")), optional_number(meta.get("ZAFPre10")),
+                 optional_number(meta.get("Zjl_HB")))
 
 
 def code_names(items):
@@ -143,5 +150,7 @@ class TdxAiDataProvider:
                 if now.timestamp() - meta_checked >= 60:
                     meta = await asyncio.to_thread(self.metadata, stocks)
                     meta_checked = now.timestamp()
-                yield await asyncio.to_thread(self.scan, stocks, sectors, meta, day)
+                batch = await asyncio.to_thread(self.scan, stocks, sectors, meta, day)
+                batch.flow_sample = meta_checked
+                yield batch
             await asyncio.sleep(self.interval)

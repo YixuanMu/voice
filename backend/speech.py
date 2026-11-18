@@ -15,7 +15,7 @@ async def speak_windows(text, rate, volume):
     )
     payload = json.dumps({"text": text, "rate": rate, "volume": volume})
     try:
-        _, error = await asyncio.wait_for(process.communicate(payload.encode("ascii") + b"\n"), 45)
+        _, error = await asyncio.wait_for(process.communicate(payload.encode("ascii") + b"\n"), 90)
         if process.returncode:
             raise RuntimeError(error.decode(errors="replace").strip() or "Windows TTS failed")
     finally:
@@ -48,7 +48,13 @@ class Announcer:
             previous = self.pending.get(key)
             if previous is None or event.priority >= previous[0].priority:
                 self.pending[key] = event, now
-        self.pending = dict(sorted(self.pending.items(), key=lambda item: -item[1][0].priority)[:32])
+        ranked = sorted(self.pending.items(), key=lambda item: -item[1][0].priority)
+        kind_counts = {}
+        self.pending = {}
+        for key, item in ranked:
+            kind_counts[key[0]] = kind_counts.get(key[0], 0) + 1
+            if kind_counts[key[0]] <= 8 and len(self.pending) < 32:
+                self.pending[key] = item
         if self.pending:
             self.ready.set()
 
@@ -64,9 +70,20 @@ class Announcer:
                 self.clear()
                 continue
             now = monotonic()
+            self.pending = {key: item for key, item in self.pending.items() if now - item[1] < 60}
             ranked = sorted(self.pending.items(), key=lambda item: -item[1][0].priority)
-            self.clear()
-            chosen = [(key, event) for key, (event, received) in ranked if now - received < 20][:3]
+            chosen = []
+            for key, (event, _) in ranked[:3]:
+                # A five-stock ranking forms its own speech segment.
+                if event.standalone and chosen:
+                    break
+                chosen.append((key, event))
+                if event.standalone:
+                    break
+            for key, _ in chosen:
+                self.pending.pop(key)
+            if not self.pending:
+                self.ready.clear()
             if not chosen:
                 continue
             for key, _ in chosen:

@@ -19,6 +19,10 @@ class Quote:
     lower: float | None = None
     suspended: bool = False
     limits_known: bool = True
+    pct_3d: float | None = None
+    pct_5d: float | None = None
+    pct_10d: float | None = None
+    main_flow_wan: float | None = None
 
 
 @dataclass(slots=True)
@@ -26,6 +30,7 @@ class Batch:
     quotes: list[Quote]
     expected: int
     sectors: dict[str, set[str]]
+    flow_sample: float | None = None
 
 
 class MockDataProvider:
@@ -57,12 +62,17 @@ class MockDataProvider:
                     prices = 1
                 if tick >= 20 and 30 <= index < 35 and 10 <= phase <= 16:
                     prices = -1
+                if 91 <= tick <= 112 and 30 <= index < 52:
+                    prices += min(tick - 90, 8) * 0.07
                 if index == self.count - 1:
                     prices = 1
                 amounts[index] += step_amount
                 quotes.append(Quote(code, f"模拟股票{index + 1}", start + tick * 10,
-                                    round(10 + prices, 2), 10, amounts[index], 11, 9))
-            yield Batch(quotes, self.count, sectors)
+                                    round(10 + prices, 2), 10, amounts[index], 11, 9,
+                                    pct_3d=float(index % 12 - 3), pct_5d=float(index % 15),
+                                    pct_10d=float(index % 20 - 5),
+                                    main_flow_wan=max(0, tick // 6 - 2) * 120 if index < 30 else 0))
+            yield Batch(quotes, self.count, sectors, start + tick // 6 * 60)
 
     async def batches(self):
         day_offset = 0
@@ -85,13 +95,15 @@ class ReplayDataProvider:
             for line in source:
                 data = json.loads(line)
                 yield Batch([Quote(**row) for row in data["quotes"]], data["expected"],
-                            {name: set(codes) for name, codes in data["sectors"].items()})
+                            {name: set(codes) for name, codes in data["sectors"].items()},
+                            data.get("flow_sample"))
                 await asyncio.sleep(self.interval)
 
 
 def encode_batch(batch):
     return json.dumps({"quotes": [asdict(quote) for quote in batch.quotes],
                        "expected": batch.expected,
+                       "flow_sample": batch.flow_sample,
                        "sectors": {name: sorted(codes) for name, codes in batch.sectors.items()}},
                       ensure_ascii=False)
 

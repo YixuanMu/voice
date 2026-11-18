@@ -3,7 +3,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from backend.engine import MarketEngine, Stock
+from backend.engine import PRIORITY, MarketEngine, Stock
 from backend.providers import Batch, MockDataProvider
 
 
@@ -69,7 +69,14 @@ class EngineTests(unittest.TestCase):
         strongest = 0
         for index, batch in enumerate(MockDataProvider().frames()):
             snapshot, events = self.engine.ingest(batch)
-            kinds.update(event.kind for event in events)
+            for event in events:
+                kinds.add(event.kind)
+                self.assertEqual(event.kind == "stock", event.text.startswith("教练教练请注意"))
+                if event.kind == "sector":
+                    self.assertIn("今日涨幅前5名", event.text)
+                    for period in ("三日", "五日", "十日"):
+                        self.assertEqual(5, event.text.count(period))
+                    self.assertTrue(event.standalone)
             strongest = max(strongest, *(row["ratio"] for row in snapshot["volume"]), 0)
             for side in highest_new:
                 highest_new[side] = max(highest_new[side], snapshot["windows"][5][side]["new"])
@@ -78,5 +85,17 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(5000, snapshot["covered"])
         self.assertEqual({"up": 6, "down": 5}, highest_new)
         self.assertGreater(strongest, 3)
-        self.assertTrue({"stock", "sector", "open", "reseal", "market"} <= kinds)
+        self.assertTrue(set(PRIORITY) - {"sector_rotation"} <= kinds,
+                        set(PRIORITY) - kinds)
+
+    def test_sector_rotation_requires_sustained_distinct_leader(self):
+        events = []
+        sectors = {"甲": {"A"}, "乙": {"B"}}
+        self.engine.detect_sector_rotation([{"name": "甲", "pct": 1}], sectors, 100, events)
+        self.engine.detect_sector_rotation([{"name": "乙", "pct": 2}], sectors, 110, events)
+        self.assertEqual([], events)
+        self.engine.detect_sector_rotation([{"name": "乙", "pct": 2}], sectors, 131, events)
+        event, = events
+        self.assertEqual("sector_rotation", event.kind)
+        self.assertIn("由甲切换至乙", event.text)
 
