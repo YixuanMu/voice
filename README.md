@@ -52,10 +52,7 @@ run_tests.bat
 
 ## 项目署名与致谢
 
-This is a project made by Yixuan and Shuo.
-
-We are sincerely gratitude to Shuo G. as he provided ChatGPT Astra 6.2 for our working.
+This is a project made by Prof. Dr. Yixuan Mu, great guy, talented guy.
 
 We wish him all the best.
 
-Yixuan is the PI.
