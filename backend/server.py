@@ -11,7 +11,8 @@ from time import time
 from tornado.web import Application, HTTPError, RequestHandler, StaticFileHandler
 from tornado.websocket import WebSocketHandler
 
-from backend.engine import MarketEngine
+from backend.engine import MarketEngine, session
+from backend.tdx import TdxConnectionError
 from backend.providers import MockDataProvider, ReplayDataProvider
 from backend.speech import Announcer
 
@@ -111,7 +112,13 @@ class Monitor:
                         continue
                     real = self.provider.label == "tdx"
                     now = time() if real else None
+                    segment = session(now) if real else None
+                    auction = segment is not None and segment[1] == -1
                     if not batch.quotes:
+                        if auction:
+                            self.status = "auction_wait"
+                            self.delay = None
+                            continue
                         raise RuntimeError("行情响应没有可用记录")
                     self.delay = max(0, now - max(q.ts for q in batch.quotes)) if real else None
                     if real and self.delay > self.settings["late_seconds"]:
@@ -124,8 +131,8 @@ class Monitor:
                     if result is None:
                         continue
                     backoff = 1
-                    self.status = "live"
                     self.snapshot, events = result
+                    self.status = "auction" if self.snapshot["auction"] else "live"
                     self.publish_events(events)
                 self.status = "complete"
                 return
@@ -134,7 +141,8 @@ class Monitor:
                 self.engine.disconnect()
                 self.announcer.clear()
                 self.active.clear()
-                self.record("connection", {"text": f"行情连接中断（{type(error).__name__}），{backoff}秒后重试"})
+                detail = str(error) if isinstance(error, TdxConnectionError) else type(error).__name__
+                self.record("connection", {"text": f"行情连接中断（{detail}），{backoff}秒后重试"})
                 await asyncio.sleep(backoff)
                 backoff = min(60, backoff * 2)
 

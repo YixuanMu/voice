@@ -35,6 +35,8 @@ def session(ts):
     if dt.weekday() >= 5:
         return None
     clock = dt.time()
+    if time(9, 15) <= clock < time(9, 25, 1):
+        return dt.date(), -1
     if time(9, 30) <= clock <= time(11, 30):
         return dt.date(), 0
     if time(13) <= clock <= time(15):
@@ -126,6 +128,10 @@ class MarketEngine:
             self.disconnect()
             return None
         day_changed = self.segment is None or segment[0] != self.segment[0]
+        auction = segment[1] == -1
+        if self.segment is not None and self.segment[1] == -1 and not auction:
+            self.stocks.clear()
+            self.trend.clear()
         if day_changed:
             self.stocks.clear()
             self.totals.clear()
@@ -148,7 +154,7 @@ class MarketEngine:
             if session(q.ts) != segment or ts - q.ts > cfg["late_seconds"]:
                 continue
             state = self.stocks.get(q.code)
-            current = limit(q)
+            current = "" if auction else limit(q)
             if state is None:
                 state = self.stocks[q.code] = Stock(q)
             elif q.ts <= state.quote.ts:
@@ -160,7 +166,7 @@ class MarketEngine:
                               and q.amount >= state.quote.amount)
                 if continuous:
                     boost = 2 if q.code in cfg["watchlist"] else 0
-                    if state.quote.limits_known and q.limits_known and previous != current:
+                    if not auction and state.quote.limits_known and q.limits_known and previous != current:
                         if previous == "up":
                             self.totals["opened"] += 1
                             self.opened_stocks.add(q.code)
@@ -178,11 +184,19 @@ class MarketEngine:
                                     self.resealed_stocks.add(q.code)
                                     events.append(Event(ts, "reseal", q.code,
                                                         f"{q.name}重新封住涨停", PRIORITY["reseal"] + boost))
-                    self.detect_stock(q, state, events, volume, moves)
+                    if not auction:
+                        self.detect_stock(q, state, events, volume, moves)
                 else:
                     state.history.clear()
             if current:
                 state.touched.add(current)
+            if auction:
+                change = (q.price / q.previous_close - 1) * 100
+                if change >= cfg["rise_3m"] or change <= -cfg["fall_3m"]:
+                    direction = "高于" if change > 0 else "低于"
+                    events.append(Event(q.ts, "stock", q.code,
+                                        f"教练教练请注意，开盘集合竞价，{q.name}虚拟撮合价"
+                                        f"{direction}昨收百分之{abs(change):.2f}", PRIORITY["stock"]))
             state.quote = q
             if not q.suspended:
                 state.history.append(q)
@@ -198,12 +212,13 @@ class MarketEngine:
             q = state.quote
             if ts - q.ts <= cfg["late_seconds"]:
                 counts["covered"] += 1
-                counts["limit_covered"] += q.limits_known or q.suspended
+                counts["limit_covered"] += not auction and (q.limits_known or q.suspended)
                 if q.suspended:
                     counts["suspended"] += 1
                     continue
                 fresh[q.code] = q
-                counts[limit(q)] += 1
+                if not auction:
+                    counts[limit(q)] += 1
                 counts["rising"] += q.price > q.previous_close
                 counts["falling"] += q.price < q.previous_close
         coverage = min(1.0, counts["covered"] / max(1, batch.expected))
@@ -234,7 +249,7 @@ class MarketEngine:
             sample_quotes = {q.code: q for q in rows if q.code in fresh and q.ts == fresh[q.code].ts}
             self.detect_sector_flows(batch.sectors, sample_quotes, batch.flow_sample, ts, events)
         self.trend.append({"ts": ts, "up": counts["rising"], "down": counts["falling"]})
-        snapshot = {"ts": ts, "up": counts["up"], "down": counts["down"],
+        snapshot = {"ts": ts, "auction": auction, "up": counts["up"], "down": counts["down"],
                     "rising": counts["rising"], "falling": counts["falling"],
                     "covered": counts["covered"], "expected": batch.expected, "coverage": coverage,
                     "limit_coverage": limit_coverage,

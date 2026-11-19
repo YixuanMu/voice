@@ -6,6 +6,11 @@ from backend.tdx import TdxAiDataProvider, parse_snapshot
 
 
 class FakeSDK:
+    def get_call_auction_batch(self, **kwargs):
+        assert kwargs["type"] == 1 and kwargs["date"] == "20260918"
+        return {"600000.SH": {"Time": ["091459", "091510", "091502", "145900"],
+                              "Price": ["9.1", "9.2", "9.3", "10"]}}
+
     def get_stock_list(self, market, list_type):
         return [{"Code": "600000.SH", "Name": "浦发银行"}, "920001.BJ", "000001.SZ", "TEST.HK"]
 
@@ -29,6 +34,15 @@ class FakeSDK:
 
 
 class TdxTests(unittest.TestCase):
+    def test_auction_uses_latest_valid_opening_indication(self):
+        provider = TdxAiDataProvider(FakeSDK())
+        batch = provider.scan_auction({"600000.SH": "浦发银行"}, {"600000.SH": {"LastClose": "9"}},
+                                      date(2026, 9, 18))
+        quote, = batch.quotes
+        self.assertEqual((9.2, 9, 0, False),
+                         (quote.price, quote.previous_close, quote.amount, quote.limits_known))
+        self.assertEqual(datetime(2026, 9, 18, 9, 15, 10, tzinfo=CHINA).timestamp(), quote.ts)
+
     def test_documented_batch_schema_and_partial_response(self):
         provider = TdxAiDataProvider(FakeSDK())
         day = date(2026, 9, 18)

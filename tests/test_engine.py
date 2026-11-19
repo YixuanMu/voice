@@ -14,7 +14,7 @@ class EngineTests(unittest.TestCase):
 
     def tick(self, offset, price):
         q = replace(self.first, ts=self.first.ts + offset, price=price,
-                    amount=self.first.amount + offset * 10000)
+                    amount=self.first.amount + max(0, offset) * 10000)
         return self.engine.ingest(Batch([q], 1, {}))
 
     def test_warmup_and_reseal(self):
@@ -41,6 +41,16 @@ class EngineTests(unittest.TestCase):
         afternoon, events = self.tick(12600, 11)
         self.assertEqual((1, []), (afternoon["up"], events))
         self.assertEqual(0, afternoon["windows"][5]["up"]["entries"])
+
+    def test_auction_alert_does_not_create_limit_transition_at_open(self):
+        auction, events = self.tick(-900, 11)
+        self.assertTrue(auction["auction"])
+        self.assertEqual(0, auction["up"])
+        self.assertIn("开盘集合竞价", events[0].text)
+        self.assertIsNone(self.tick(-200, 11))
+        opened, events = self.tick(0, 11)
+        self.assertFalse(opened["auction"])
+        self.assertEqual((1, 0, []), (opened["up"], opened["windows"][5]["up"]["entries"], events))
 
     def test_partial_coverage_suppresses_market_summary(self):
         self.engine.settings["market_limit_alert"] = 1

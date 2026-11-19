@@ -13,6 +13,10 @@ SNAPSHOT_FIELDS = ["Now", "LastClose", "RefreshTime", "Amount", "ZAFPre3"]
 META_FIELDS = ["HqDate", "ZTPrice", "DTPrice", "StopJYDate_Recent", "ZAFPre5", "ZAFPre10", "Zjl_HB"]
 
 
+class TdxConnectionError(RuntimeError):
+    pass
+
+
 def optional_number(value):
     try:
         number = float(value)
@@ -82,7 +86,7 @@ class TdxAiDataProvider:
         items = code_names(self.sdk.get_stock_list(market="5", list_type=1))
         stocks = {code: name for code, name in items.items() if code.endswith((".SH", ".SZ", ".BJ"))}
         if not stocks:
-            raise RuntimeError("TdxAiData returned an empty A-share universe")
+            raise TdxConnectionError("通达信未返回股票列表。请检查数据服务 Key、账户积分及网络。")
         return stocks
 
     def calendar(self, day):
@@ -128,25 +132,64 @@ class TdxAiDataProvider:
                 quotes.append(quote)
         return Batch(quotes, len(stocks), sectors)
 
+    def scan_auction(self, stocks, previous, day):
+        day_key = day.strftime("%Y%m%d")
+
+        def fetch_auction(**kwargs):
+            return self.sdk.get_call_auction_batch(type=1, date=day_key, **kwargs)
+
+        rows = self.fetch(fetch_auction, stocks, ["Time", "Price"])
+        quotes = []
+        for code, row in rows.items():
+            close = positive_number(previous.get(code, {}).get("LastClose"))
+            clocks, prices = row.get("Time"), row.get("Price")
+            if close is None or not isinstance(clocks, list) or not isinstance(prices, list):
+                continue
+            points = []
+            for clock, value in zip(clocks, prices):
+                digits = str(clock).zfill(6)
+                price = positive_number(value)
+                if len(digits) == 6 and digits.isascii() and digits.isdigit() and price is not None:
+                    if "091500" <= digits <= "092500" and int(digits[-2:]) < 60:
+                        points.append((digits, price))
+            if points:
+                clock, price = max(points, key=lambda point: point[0])
+                stamp = datetime.strptime(day_key + clock, "%Y%m%d%H%M%S").replace(tzinfo=CHINA)
+                quotes.append(Quote(code, stocks[code], stamp.timestamp(), price, close, 0,
+                                    limits_known=False))
+        return Batch(quotes, len(stocks), {})
+
     async def batches(self):
         day = None
         stocks = None
         meta = {}
+        sectors = None
+        previous = None
         while True:
             now = datetime.now(CHINA)
-            if session(now.timestamp()) is None:
+            segment = session(now.timestamp())
+            if segment is None:
                 yield None
                 await asyncio.sleep(self.interval)
                 continue
             if now.date() != day:
                 stocks = await asyncio.to_thread(self.connect)
                 trading = await asyncio.to_thread(self.calendar, now.date())
-                sectors = await asyncio.to_thread(self.sectors, stocks) if trading else {}
                 day, meta = now.date(), {}
+                previous, sectors = None, None
                 meta_checked = 0
             if not trading:
                 yield None
+            elif segment[1] == -1:
+                if previous is None:
+                    previous = await asyncio.to_thread(self.fetch, self.sdk.get_market_snapshot_batch,
+                                                       stocks, ["LastClose"])
+                yield await asyncio.to_thread(self.scan_auction, stocks, previous, day)
+                await asyncio.sleep(max(30, self.interval))
+                continue
             else:
+                if sectors is None:
+                    sectors = await asyncio.to_thread(self.sectors, stocks)
                 if now.timestamp() - meta_checked >= 60:
                     meta = await asyncio.to_thread(self.metadata, stocks)
                     meta_checked = now.timestamp()

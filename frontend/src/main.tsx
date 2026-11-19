@@ -9,6 +9,7 @@ type Row = { name: string; pct: number; fast: number; falling: number; limits: n
 type Volume = { code: string; name: string; pct: number; ratio: number; minutes: number }
 type Point = { ts: number; up: number; down: number }
 type Market = Point & {
+  auction?: boolean
   rising: number; falling: number; covered: number; expected: number; coverage: number
   reliable: boolean; limit_coverage: number; opened: number; resealed: number; suspended: number
   opened_stocks: number; resealed_stocks: number
@@ -26,6 +27,7 @@ const percent = (value: number) => (value > 0 ? '+' : '') + value.toFixed(2) + '
 const statuses: Record<string, string> = {
   live: '数据更新中', connecting: '等待数据', closed: '休市', stale: '行情延迟',
   disconnected: '断线重试中', complete: '数据流已结束',
+  auction: '开盘集合竞价', auction_wait: '集合竞价 · 等待虚拟撮合行情',
 }
 const labels: Record<string, string> = {
   gap_seconds: '连续样本最大间隔（秒）', late_seconds: '最大行情延迟（秒）', coverage: '市场最低覆盖率',
@@ -144,7 +146,8 @@ function Dashboard() {
       <span>数据延迟 {state?.delay == null ? '—' : state.delay.toFixed(1) + ' 秒'}</span>
       <span>覆盖 {market ? market.covered + ' / ' + market.expected : '—'}</span>
       {market && <span>涨跌停字段覆盖 {(market.limit_coverage * 100).toFixed(1)}% · 停牌 {market.suspended}</span>}
-      {market && (!market.reliable || state?.status !== 'live' || !connected) && <strong className="sim">统计可能不完整或已过期</strong>}
+      {market?.auction && <strong className="sim">虚拟撮合价，涨跌停统计从连续交易开始</strong>}
+      {market && !market.auction && (!market.reliable || state?.status !== 'live' || !connected) && <strong className="sim">统计可能不完整或已过期</strong>}
       <span role="status">{message}</span>
     </div>
     <section className="metrics">

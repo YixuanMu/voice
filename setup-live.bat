@@ -14,8 +14,9 @@ if errorlevel 1 (
   echo Installing the SDK. Internet access is needed.
   ".venv\Scripts\python.exe" -m pip --disable-pip-version-check install --timeout 15 --retries 1 tdxaidata -i https://pypi.tuna.tsinghua.edu.cn/simple || goto :fail
 )
-echo [3/3] Opening the local Key prompt...
+echo [3/3] Paste the Key in the pop-up window. Verification checks one quote.
 ".venv\Scripts\python.exe" -m scripts.configure_live
+if errorlevel 2 exit /b 0
 if errorlevel 1 goto :fail
 set "VOICE_SOURCE="
 call "%~dp0start.bat"
